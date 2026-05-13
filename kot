@@ -1,0 +1,173 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from scipy.stats import (
+    ttest_ind,
+    mannwhitneyu,
+    shapiro,
+    levene
+)
+
+# ============================================================
+# 1. Wczytanie danych
+# ============================================================
+
+chf = pd.read_csv("chf.csv")
+nsr = pd.read_csv("nsr.csv")
+
+print(chf.head())
+print(nsr.head())
+
+# ============================================================
+# 2. Dodanie etykiet grup
+# ============================================================
+
+chf["group"] = "CHF"
+nsr["group"] = "NSR"
+
+# połączenie danych
+data = pd.concat([chf, nsr], ignore_index=True)
+
+# ============================================================
+# 3. Wybór zmiennych numerycznych
+# ============================================================
+
+variables = []
+
+for col in data.columns:
+
+    if col in ["group", "file_name"]:
+        continue
+
+    if np.issubdtype(data[col].dtype, np.number):
+        variables.append(col)
+
+print("Analizowane zmienne:")
+print(variables)
+
+# ============================================================
+# 4. Statystyki opisowe
+# ============================================================
+
+print("\n===== STATYSTYKI OPISOWE =====\n")
+
+stats = data.groupby("group")[variables].agg(
+    ["mean", "median", "std"]
+)
+
+print(stats)
+
+# ============================================================
+# 5. Histogramy
+# ============================================================
+
+for var in variables:
+
+    plt.figure(figsize=(7,4))
+
+    sns.histplot(
+        data=data,
+        x=var,
+        hue="group",
+        bins=20,
+        kde=False
+    )
+
+    plt.title(f"Histogram - {var}")
+    plt.xlabel(var)
+    plt.ylabel("Liczba pacjentów")
+
+    plt.tight_layout()
+    plt.show()
+
+# ============================================================
+# 6. Wielkość efektu
+# ============================================================
+
+def cohens_d(x, y):
+
+    nx = len(x)
+    ny = len(y)
+
+    pooled_std = np.sqrt(
+        ((nx - 1) * np.var(x, ddof=1) +
+         (ny - 1) * np.var(y, ddof=1))
+        / (nx + ny - 2)
+    )
+
+    return (np.mean(x) - np.mean(y)) / pooled_std
+
+# ============================================================
+# 7. Testy statystyczne
+# ============================================================
+
+results = []
+
+for var in variables:
+
+    chf_values = data[data["group"] == "CHF"][var].dropna()
+    nsr_values = data[data["group"] == "NSR"][var].dropna()
+
+    # test normalności
+    p1 = shapiro(chf_values)[1]
+    p2 = shapiro(nsr_values)[1]
+
+    normal = (p1 > 0.05) and (p2 > 0.05)
+
+    if normal:
+
+        # test równości wariancji
+        lev_p = levene(chf_values, nsr_values)[1]
+
+        stat, p = ttest_ind(
+            chf_values,
+            nsr_values,
+            equal_var=(lev_p > 0.05)
+        )
+
+        test_name = "t-test"
+
+    else:
+
+        stat, p = mannwhitneyu(
+            chf_values,
+            nsr_values,
+            alternative="two-sided"
+        )
+
+        test_name = "Mann-Whitney"
+
+    d = cohens_d(chf_values, nsr_values)
+
+    results.append({
+        "Variable": var,
+        "Test": test_name,
+        "Statistic": stat,
+        "p-value": p,
+        "Cohens_d": d
+    })
+
+results_df = pd.DataFrame(results)
+
+print("\n===== WYNIKI TESTÓW =====\n")
+print(results_df)
+
+# ============================================================
+# 8. Interpretacja
+# ============================================================
+
+print("\n===== INTERPRETACJA =====\n")
+
+for _, row in results_df.iterrows():
+
+    print(f"\n{row['Variable']}")
+    print(f"Test: {row['Test']}")
+    print(f"p-value = {row['p-value']:.5f}")
+    print(f"Cohen d = {row['Cohens_d']:.3f}")
+
+    if row["p-value"] < 0.05:
+        print("Istnieje istotna różnica między grupami.")
+    else:
+        print("Brak istotnej różnicy między grupami.")
